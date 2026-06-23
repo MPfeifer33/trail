@@ -10,7 +10,8 @@ pub fn print_log(
     if is_json {
         let entries: Vec<serde_json::Value> = commits.iter().zip(evidence.iter())
             .map(|(c, e)| serde_json::json!({
-                "sha": c.short_sha,
+                "sha": c.sha,
+                "short_sha": c.short_sha,
                 "author": c.author,
                 "date": c.date,
                 "subject": c.subject,
@@ -60,6 +61,16 @@ pub fn print_summary(commits: &[CommitInfo], evidence: &[CommitEvidence], is_jso
     };
 
     if is_json {
+        let recent: Vec<serde_json::Value> = commits.iter().take(5)
+            .map(|c| serde_json::json!({
+                "sha": c.sha,
+                "short_sha": c.short_sha,
+                "author": c.author,
+                "date": c.date,
+                "subject": c.subject,
+            }))
+            .collect();
+
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "ok": true,
             "summary": {
@@ -73,6 +84,7 @@ pub fn print_summary(commits: &[CommitInfo], evidence: &[CommitEvidence], is_jso
                     "oldest": commits.last().map(|c| &c.date),
                     "newest": commits.first().map(|c| &c.date),
                 },
+                "recent": recent,
             }
         }))?);
     } else {
@@ -167,9 +179,17 @@ pub fn print_commit_detail(
 
 pub fn print_sources(sources: &EvidenceSources, is_json: bool) -> Result<(), TrailError> {
     if is_json {
+        let source_details = serde_json::json!([
+            { "name": "witness", "available": sources.witness, "path": ".agent-witness/evidence/" },
+            { "name": "latch", "available": sources.latch, "path": ".latch.db" },
+            { "name": "probe", "available": sources.probe, "path": ".agent-probe/" },
+            { "name": "atlas", "available": sources.atlas, "path": ".agent-atlas/" }
+        ]);
+
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "ok": true,
             "sources": sources,
+            "source_details": source_details,
         }))?);
     } else {
         println!("trail sources:");

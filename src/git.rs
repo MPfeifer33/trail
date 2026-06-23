@@ -1,6 +1,6 @@
+use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
-use serde::Serialize;
 
 use crate::TrailError;
 
@@ -50,6 +50,9 @@ pub fn get_commits(
         .output()?;
 
     if !output.status.success() {
+        if is_empty_history_error(&String::from_utf8_lossy(&output.stderr)) {
+            return Ok(Vec::new());
+        }
         return Err(TrailError::Validation("Failed to read git log".into()));
     }
 
@@ -96,24 +99,15 @@ pub fn get_commits(
 
 fn get_file_changes(repo: &Path, sha: &str) -> Result<Vec<FileChange>, TrailError> {
     let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}~1..{}", sha, sha)])
+        .args(["diff-tree", "--root", "--no-commit-id", "-r", "--numstat", sha])
         .current_dir(repo)
         .output()?;
 
-    if !output.status.success() {
-        // First commit won't have a parent
-        let output = Command::new("git")
-            .args(["diff", "--numstat", "--root", sha])
-            .current_dir(repo)
-            .output()?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-        return parse_numstat(&String::from_utf8_lossy(&output.stdout));
+    if output.status.success() {
+        parse_numstat(&String::from_utf8_lossy(&output.stdout))
+    } else {
+        Ok(Vec::new())
     }
-
-    parse_numstat(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn parse_numstat(text: &str) -> Result<Vec<FileChange>, TrailError> {
@@ -129,6 +123,12 @@ fn parse_numstat(text: &str) -> Result<Vec<FileChange>, TrailError> {
         }
     }
     Ok(changes)
+}
+
+fn is_empty_history_error(stderr: &str) -> bool {
+    stderr.contains("does not have any commits yet")
+        || stderr.contains("your current branch")
+        || stderr.contains("No commits yet")
 }
 
 /// Get a single commit by SHA.
@@ -181,4 +181,101 @@ fn get_commits_by_sha(repo: &Path, sha: &str) -> Result<Vec<CommitInfo>, TrailEr
     }
 
     Ok(commits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_empty_history_errors() {
+        assert!(is_empty_history_error(
+            "fatal: your current branch 'master' does not have any commits yet"
+        ));
+        assert!(!is_empty_history_error("fatal: bad revision 'HEAD'"));
+    }
+
+    #[test]
+    fn root_commit_stats_ignore_worktree_changes() {
+        let workspace = tempfile::tempdir().unwrap();
+        init_repo(workspace.path());
+
+        write_file(workspace.path().join("README.md"), "hello\n");
+        write_file(workspace.path().join("src/lib.rs"), "pub fn value() {}\n");
+        git(workspace.path(), &["add", "."]);
+        git(workspace.path(), &["commit", "-m", "initial"]);
+
+        write_file(workspace.path().join("src/lib.rs"), "pub fn value() {}\n// dirty\n");
+
+        let commits = get_commits(workspace.path(), 1, None, None).unwrap();
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].files_changed.len(), 2);
+        assert!(commits[0].files_changed.iter().any(|f| f.path == "README.md"));
+        assert!(commits[0].files_changed.iter().any(|f| f.path == "src/lib.rs"));
+    }
+
+    fn init_repo(path: &std::path::Path) {
+        git(path, &["init"]);
+        git(path, &["config", "user.email", "trail@example.test"]);
+        git(path, &["config", "user.name", "Trail Test"]);
+    }
+
+    fn git(path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn empty_repo_returns_empty_commits() {
+        let workspace = tempfile::tempdir().unwrap();
+        init_repo(workspace.path());
+        let commits = get_commits(workspace.path(), 10, None, None).unwrap();
+        assert!(commits.is_empty());
+    }
+
+    #[test]
+    fn get_commit_by_sha() {
+        let workspace = tempfile::tempdir().unwrap();
+        init_repo(workspace.path());
+        write_file(workspace.path().join("test.txt"), "hello");
+        git(workspace.path(), &["add", "."]);
+        git(workspace.path(), &["commit", "-m", "first commit"]);
+
+        let commits = get_commits(workspace.path(), 1, None, None).unwrap();
+        let sha = &commits[0].sha;
+        let commit = get_commit(workspace.path(), sha).unwrap();
+        assert_eq!(commit.subject, "first commit");
+    }
+
+    #[test]
+    fn parse_numstat_handles_empty() {
+        let result = parse_numstat("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_numstat_handles_binary() {
+        // Binary files show - instead of numbers
+        let result = parse_numstat("-\t-\timage.png").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].additions, 0);
+        assert_eq!(result[0].path, "image.png");
+    }
+
+    fn write_file(path: std::path::PathBuf, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
 }

@@ -34,7 +34,7 @@ pub fn get_commits(
     let mut args = vec![
         "log".to_string(),
         format!("-{}", limit),
-        "--format=%H|%h|%an|%ai|%s|%b%x00".to_string(),
+        "--format=%H\x1f%h\x1f%an\x1f%ai\x1f%s\x1f%b%x00".to_string(),
     ];
 
     if let Some(s) = since {
@@ -65,7 +65,7 @@ pub fn get_commits(
             continue;
         }
 
-        let parts: Vec<&str> = entry.splitn(6, '|').collect();
+        let parts: Vec<&str> = entry.splitn(6, '\x1f').collect();
         if parts.len() < 5 {
             continue;
         }
@@ -140,7 +140,7 @@ pub fn get_commit(repo: &Path, sha: &str) -> Result<CommitInfo, TrailError> {
 
 fn get_commits_by_sha(repo: &Path, sha: &str) -> Result<Vec<CommitInfo>, TrailError> {
     let output = Command::new("git")
-        .args(["log", "-1", "--format=%H|%h|%an|%ai|%s|%b%x00", sha])
+        .args(["log", "-1", "--format=%H\x1f%h\x1f%an\x1f%ai\x1f%s\x1f%b%x00", sha])
         .current_dir(repo)
         .output()?;
 
@@ -157,7 +157,7 @@ fn get_commits_by_sha(repo: &Path, sha: &str) -> Result<Vec<CommitInfo>, TrailEr
             continue;
         }
 
-        let parts: Vec<&str> = entry.splitn(6, '|').collect();
+        let parts: Vec<&str> = entry.splitn(6, '\x1f').collect();
         if parts.len() < 5 {
             continue;
         }
